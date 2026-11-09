@@ -1,0 +1,83 @@
+@startuml
+skinparam defaultFontName Noto Sans CJK SC
+skinparam defaultFontSize 15
+skinparam titleFontSize 22
+skinparam shadowing false
+skinparam sequenceMessageAlign left
+skinparam maxMessageSize 270
+skinparam sequenceGroupBackgroundColor #F4F7FA
+skinparam sequenceParticipantBackgroundColor #EAF2F8
+hide footbox
+title 校园二手交易系统 · 提交预约序列图 A · 重复请求与预检
+
+actor "买家" as Buyer
+boundary "商品详情页" as UI
+control "预约与交易模块" as Booking
+control "商品管理模块" as Product
+database "数据持久化" as DB
+
+Buyer -> UI : 点击提交预约
+UI -> Booking : 提交预约(requestId, productId,\nexpectedVersion, expectedPrice)
+Booking -> Booking : 从会话获取 buyerId，校验登录、身份和参数
+break 身份或参数校验失败
+  Booking -> DB : 独立记录失败日志，不记录敏感数据
+  Booking --> UI : 返回失败原因及下一步
+  UI --> Buyer : 提示登录或修正输入
+end
+
+Booking -> Booking : 规范化商品编号、预期版本和价格，计算请求指纹
+Booking -> DB : BEGIN (READ COMMITTED)\n锁定 (buyerId, requestId)，再读 ReservationRequest
+DB --> Booking : 已有请求记录，或不存在
+note over Booking, DB
+  同键并发等待前一事务结束后再读。
+  请求键按买家和 requestId 联合唯一。
+end note
+
+break 已有请求记录
+  alt 指纹不同
+    Booking -> DB : 结束事务并释放锁，保留首次结果\n独立记录失败日志
+    Booking --> UI : 拒绝同标识提交不同内容
+  else 指纹相同
+    opt 首次处理结果关联了预约
+      Booking -> DB : 按买家归属读取关联预约的当前状态
+      DB --> Booking : 预约编号和查询时的状态
+    end
+    Booking -> DB : 结束事务并释放锁
+    Booking --> UI : 返回首次结果和关联预约当前状态（若有）
+  end
+  UI --> Buyer : 展示处理结果
+end
+
+Booking -> Product : 预检商品及有效预约
+Product -> DB : 读取商品状态、版本、价格和有效预约归属
+DB --> Product : 预检所需数据
+Product --> Booking : 返回数据与可访问性判断
+Booking -> Booking : 依次判断访问与自购、本人有效预约、\n商品可售性、版本与价格
+note right of Booking
+  待卖家确认和已确认为有效预约。
+  商品不可访问或自购时拒绝；
+  本人已有有效预约时返回该预约；
+  被他人预约、非已发布或版本价格不符时拒绝。
+  可售但版本或价格变化时，返回有权查看的当前价格，
+  提示刷新并重新确认。
+end note
+
+break 预检已得出结果（无须新建预约）
+  Booking -> DB : 保存 ReservationRequest 首次结果\n若是本人已有预约则关联该预约\n拒绝时同时写失败日志
+  Booking -> DB : COMMIT
+  alt 提交成功
+    Booking --> UI : 返回拒绝原因或本人已有预约
+  else 确认回滚
+    Booking --> UI : 提示暂时失败，沿用原标识重试
+  else 提交结果未知
+    Booking --> UI : 提示沿用原标识和原内容核对或重试
+  end
+  UI --> Buyer : 展示处理结果
+end
+
+note over Booking, DB
+  预检通过后转图 B。沿用同一事务和请求键锁，
+  在商品行锁下重新读取并校验商品和有效预约。
+  若提交前发生数据库异常，停止处理并回滚，沿用原标识重试。
+end note
+@enduml

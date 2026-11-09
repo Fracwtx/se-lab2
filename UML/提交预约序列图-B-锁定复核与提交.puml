@@ -1,0 +1,75 @@
+@startuml
+skinparam defaultFontName Noto Sans CJK SC
+skinparam defaultFontSize 15
+skinparam titleFontSize 22
+skinparam shadowing false
+skinparam sequenceMessageAlign left
+skinparam maxMessageSize 270
+skinparam sequenceGroupBackgroundColor #F4F7FA
+skinparam sequenceParticipantBackgroundColor #EAF2F8
+hide footbox
+title 校园二手交易系统 · 提交预约序列图 B · 锁定复核与提交
+
+actor "买家" as Buyer
+boundary "商品详情页" as UI
+control "预约与交易模块" as Booking
+control "商品管理模块" as Product
+database "数据持久化" as DB
+
+note over Booking, DB
+  接图 A 的预检通过分支，沿用同一事务和请求键锁。
+  同一商品的相关写操作遵循同一商品行锁协议。
+end note
+Booking -> Product : 在当前事务内锁定商品并复核
+Product -> DB : 取得商品行锁，重读商品及有效预约
+DB --> Product : 最新归属、状态、版本、价格和有效预约
+Product --> Booking : 复核结果
+
+group 本事务内写入，遇首个失败即停止后续写入
+  alt 本买家的其他请求已创建有效预约
+    Booking -> DB : 记录本请求的首次结果，关联已有预约
+  else 商品被他人占用或其他条件已变
+    Booking -> DB : 保存并发冲突结果及失败日志
+    note right of Booking
+      返回有权查看的变化和下一步，
+      如已被预约或需刷新后重新确认。
+    end note
+  else 复核通过
+    Booking -> DB : 新建预约「待卖家确认」与交易快照\nexpiresAt = createdAt + 24 小时
+    Booking -> Product : 将商品更新为「已预约」
+    Product -> DB : 按锁定状态和版本更新商品，递增版本
+    DB --> Product : 更新结果
+    Product --> Booking : 商品变更结果
+    Booking -> DB : 保存首次请求结果并关联新预约\n追加成功日志，登记待发送通知
+  end
+end
+
+break 任一必要写入失败或发生锁等待超时 / 死锁
+  Booking -> DB : 回滚（若事务尚未回滚），释放事务锁
+  Booking -> DB : 独立尝试追加失败日志
+  Booking --> UI : 系统暂时失败，沿用原标识核对或重试
+  UI --> Buyer : 显示恢复提示
+end
+
+Booking -> DB : COMMIT
+alt 收到提交成功确认
+  DB --> Booking : 已提交，释放锁
+  Booking --> UI : 返回本次结果：新建成功、已有预约或并发冲突
+  UI --> Buyer : 显示结果，成功时展示预约状态
+else 确认事务已回滚
+  DB --> Booking : 提交失败，事务已回滚
+  Booking -> DB : 独立尝试追加失败日志
+  Booking --> UI : 未提交，沿用原标识重试
+  UI --> Buyer : 显示恢复提示
+else 提交确认丢失，结果未知
+  Booking --> UI : 若仍可响应，返回结果待核对
+  UI --> Buyer : 结果待核对或客户端超时，沿用原标识和内容查询或重试
+end
+
+note over Booking, DB
+  原请求实际已提交时，重试走图 A 的同键重放。
+  原请求实际回滚时，原标识可以重新处理。
+  通知任务只投递已提交的待发送记录，失败只重试通知。
+  同一商品最多一条有效预约，由存储层约束兜底。
+end note
+@enduml
