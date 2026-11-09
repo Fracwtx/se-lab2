@@ -10,7 +10,7 @@ skinparam nodesep 35
 skinparam ranksep 45
 hide empty description
 top to bottom direction
-title 校园二手交易系统 · 商品状态图（初稿）
+title 校园二手交易系统 · 商品状态图
 state "未完成商品（仅分组）" as Unfinished {
  state "草稿" as Draft
  state "待审核" as Reviewing
@@ -18,7 +18,7 @@ state "未完成商品（仅分组）" as Unfinished {
  state "已预约" as Reserved
  state "已确认" as Confirmed
  state "已下架" as OffShelf
- [*] --> Draft : 卖家保存新草稿\n[已填写字段合法]
+ [*] --> Draft
  Draft --> Reviewing : 卖家提交审核\n[字段完整合法]
  Reviewing --> Draft : 卖家撤回审核\n[尚未被审核处理]
  Reviewing --> Draft : 管理员驳回审核\n[填写驳回原因]
@@ -44,6 +44,10 @@ Unfinished --> Violation : 管理员违规处置\n[确认违规、填写原因]\
 Violation --> OffShelf : 管理员解除违规限制\n[确认可解除、记录原因]\n/ 保持不公开，卖家须重新送审
 Violation : 管理员违规处置 [有新的处置依据和原因]\n/ 追加记录，保持限制
 Completed : 管理员违规处置 [确认违规、填写原因]\n/ 追加违规记录、隐藏商品；保留完成状态
+note right of Draft
+ 卖家保存新草稿时，已填写字段须合法。
+ 校验通过后，商品以草稿状态创建。
+end note
 note bottom of Published
  G1：已登录普通买家，非商品卖家；
  当前商品已发布且无有效预约；

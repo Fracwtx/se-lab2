@@ -10,11 +10,11 @@ skinparam nodesep 35
 skinparam ranksep 45
 hide empty description
 top to bottom direction
-title 校园二手交易系统 · 预约状态图（初稿）
+title 校园二手交易系统 · 预约状态图
 state "有效预约（仅分组）" as Active {
  state "待卖家确认" as Waiting
  state "已确认" as Confirmed
- [*] --> Waiting : 买家提交预约\n[G1]\n/ 创建预约，保存交易快照
+ [*] --> Waiting : / 保存交易快照
  Waiting --> Confirmed : 卖家确认预约\n[now < expiresAt]\n/ 商品同步变已确认
  Confirmed : 参与者提交终止申请 [无待处理申请、填写理由] / 新增申请
  Confirmed : 管理员驳回终止申请 [有待处理申请、填写处理理由] / 申请结案
@@ -32,6 +32,7 @@ Confirmed --> Terminated : 管理员批准普通终止\n[G2]\n/ 商品变已下�
 Active --> Terminated : 管理员违规处置\n[确认商品违规、填写原因]\n/ 商品同步违规下架，保留快照与处置记录
 Completed : 管理员违规处置 [关联商品确认违规、填写原因]\n/ 商品追加违规记录并隐藏；预约仍已完成
 note bottom of Waiting
+ 买家提交预约并通过 G1 校验后，创建待卖家确认的预约。
  G1：已登录普通买家且非商品卖家；
  商品已发布、无有效预约、版本及价格一致；
  新动作请求通过幂等检查。
