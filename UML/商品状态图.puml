@@ -1,0 +1,70 @@
+@startuml
+skinparam defaultFontName Noto Sans CJK SC
+skinparam defaultFontSize 16
+skinparam titleFontSize 24
+skinparam shadowing false
+skinparam stateBackgroundColor #EEF5FA
+skinparam stateBorderColor #486581
+skinparam ArrowColor #42566B
+skinparam nodesep 35
+skinparam ranksep 45
+hide empty description
+top to bottom direction
+title 校园二手交易系统 · 商品状态图（初稿）
+state "未完成商品（仅分组）" as Unfinished {
+ state "草稿" as Draft
+ state "待审核" as Reviewing
+ state "已发布" as Published
+ state "已预约" as Reserved
+ state "已确认" as Confirmed
+ state "已下架" as OffShelf
+ [*] --> Draft : 卖家保存新草稿\n[已填写字段合法]
+ Draft --> Reviewing : 卖家提交审核\n[字段完整合法]
+ Reviewing --> Draft : 卖家撤回审核\n[尚未被审核处理]
+ Reviewing --> Draft : 管理员驳回审核\n[填写驳回原因]
+ Reviewing --> Published : 管理员通过审核\n[审核版本仍有效]
+ Published --> Reviewing : 卖家修改已发布商品\n[无有效预约、字段合法]\n/ 保存修改并停止公开
+ Published --> OffShelf : 卖家普通下架\n[无有效预约]
+ OffShelf --> Reviewing : 卖家重新送审\n[字段完整合法]
+ Published --> Reserved : 买家提交预约\n[G1]\n/ 保存预约与交易快照
+ Reserved --> Confirmed : 卖家确认预约\n[待卖家确认且 now < expiresAt]
+ Reserved --> Published : 买家取消预约\n[关联预约仍待卖家确认]
+ Reserved --> Published : 卖家拒绝预约\n[待卖家确认、未到期、填写原因]
+ Reserved --> Published : 预约到期处理\n[待卖家确认且 now >= expiresAt]
+ Confirmed --> OffShelf : 管理员批准普通终止\n[G2]\n/ 保留终止处理记录
+ Draft : 卖家保存修改 [已填写字段合法] / 保存内容
+ OffShelf : 卖家保存修改 [已填写字段合法] / 保存内容
+ Confirmed : 参与者提交终止申请 [无待处理申请、填写理由] / 新增申请
+ Confirmed : 管理员驳回终止申请 [有待处理申请、填写处理理由] / 申请结案
+}
+state "违规下架" as Violation
+state "已完成" as Completed
+Confirmed --> Completed : 买家确认完成\n[关联预约已确认、买家声明已收货]\n/ 记录完成时间，关闭待处理终止申请
+Unfinished --> Violation : 管理员违规处置\n[确认违规、填写原因]\n/ 隐藏商品；若有有效预约，同步终止
+Violation --> OffShelf : 管理员解除违规限制\n[确认可解除、记录原因]\n/ 保持不公开，卖家须重新送审
+Violation : 管理员违规处置 [有新的处置依据和原因]\n/ 追加记录，保持限制
+Completed : 管理员违规处置 [确认违规、填写原因]\n/ 追加违规记录、隐藏商品；保留完成状态
+note bottom of Published
+ G1：已登录普通买家，非商品卖家；
+ 当前商品已发布且无有效预约；
+ 商品版本及价格与本次确认一致；
+ 新动作请求通过幂等检查。
+end note
+note bottom of OffShelf
+ G2：有待处理终止申请；管理员核实双方同意；
+ 填写双方意见和原因；关联预约仍为已确认。
+ 普通终止后为已下架，不自动恢复已发布。
+end note
+note bottom of Violation
+ 分组内六种状态均可进入违规下架。
+ “未完成商品”不是新增的 ProductStatus 值。
+ 已预约 / 已确认时，必须同步终止关联有效预约。
+end note
+legend bottom
+  标签：触发事件 [条件] / 动作；框内为不退出当前状态的内部处理。
+  全部写入先校验权限、归属、当前状态及版本；不满足则拒绝并记录失败。
+  跨对象事件在同一事务提交商品、预约、处理记录、成功日志、待发送通知；
+  任一必要写入失败整体回滚。通知提交后发送，失败仅重试通知。
+  并发时仅最先合法提交的变更生效；幂等重放返回原结果，不重新执行转换。
+endlegend
+@enduml

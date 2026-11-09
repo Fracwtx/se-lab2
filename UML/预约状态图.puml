@@ -1,0 +1,57 @@
+@startuml
+skinparam defaultFontName Noto Sans CJK SC
+skinparam defaultFontSize 16
+skinparam titleFontSize 24
+skinparam shadowing false
+skinparam stateBackgroundColor #EEF5FA
+skinparam stateBorderColor #486581
+skinparam ArrowColor #42566B
+skinparam nodesep 35
+skinparam ranksep 45
+hide empty description
+top to bottom direction
+title 校园二手交易系统 · 预约状态图（初稿）
+state "有效预约（仅分组）" as Active {
+ state "待卖家确认" as Waiting
+ state "已确认" as Confirmed
+ [*] --> Waiting : 买家提交预约\n[G1]\n/ 创建预约，保存交易快照
+ Waiting --> Confirmed : 卖家确认预约\n[now < expiresAt]\n/ 商品同步变已确认
+ Confirmed : 参与者提交终止申请 [无待处理申请、填写理由] / 新增申请
+ Confirmed : 管理员驳回终止申请 [有待处理申请、填写处理理由] / 申请结案
+}
+state "已取消" as Cancelled
+state "已拒绝" as Rejected
+state "已超时" as TimedOut
+state "已终止" as Terminated
+state "已完成" as Completed
+Waiting --> Cancelled : 买家取消预约\n[当前仍待卖家确认]\n/ 商品恢复已发布
+Waiting --> Rejected : 卖家拒绝预约\n[now < expiresAt、填写原因]\n/ 商品恢复已发布
+Waiting --> TimedOut : 预约到期处理\n[now >= expiresAt]\n/ 商品恢复已发布
+Confirmed --> Completed : 买家确认完成\n[买家声明已收货]\n/ 商品同步变已完成，记录时间并关闭待处理申请
+Confirmed --> Terminated : 管理员批准普通终止\n[G2]\n/ 商品变已下架
+Active --> Terminated : 管理员违规处置\n[确认商品违规、填写原因]\n/ 商品同步违规下架，保留快照与处置记录
+Completed : 管理员违规处置 [关联商品确认违规、填写原因]\n/ 商品追加违规记录并隐藏；预约仍已完成
+note bottom of Waiting
+ G1：已登录普通买家且非商品卖家；
+ 商品已发布、无有效预约、版本及价格一致；
+ 新动作请求通过幂等检查。
+ expiresAt = createdAt + 24小时，now 为服务端时间。
+end note
+note bottom of Terminated
+ G2：有待处理终止申请；管理员核实双方同意；
+ 填写双方意见和原因；预约当前仍为已确认。
+ 违规终止不要求普通申请或双方同意。
+end note
+note bottom of Completed
+ 已取消、已拒绝、已超时、已终止、已完成均为业务终态。
+ 不得回到有效预约；再预约须使用新动作、新标识、新预约。
+ “有效预约”仅分组，不是新增 ReservationStatus 值。
+end note
+legend bottom
+  标签：触发事件 [条件] / 动作；框内为不退出当前状态的内部处理。
+  全部写入先校验权限、归属、当前状态及版本；不满足则拒绝并记录失败。
+  跨对象事件在同一事务提交商品、预约、处理记录、成功日志、待发送通知；
+  任一必要写入失败整体回滚。通知提交后发送，失败仅重试通知。
+  并发时仅最先合法提交的变更生效；幂等重放返回原结果，不重新执行转换。
+endlegend
+@enduml
