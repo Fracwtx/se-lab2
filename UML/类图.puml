@@ -1,0 +1,159 @@
+@startuml
+' 领域类图初稿；设计推断与约束详见 类图审查说明.md
+skinparam defaultFontName Noto Sans CJK SC
+skinparam defaultFontSize 15
+skinparam titleFontSize 24
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+skinparam linetype polyline
+skinparam minClassWidth 180
+skinparam nodesep 45
+skinparam ranksep 65
+skinparam classBackgroundColor #EEF5FA
+skinparam classBorderColor #486581
+hide methods
+hide circle
+left to right direction
+title 校园二手交易系统 · 领域类图（初稿）
+
+class "User 用户" as User {
+ userId : ID {unique}
+ username : String {unique}
+ passwordHash : String
+ passwordSalt : String
+ nickname : String
+ contactInfo : String
+ accountType : 普通用户 | 管理员
+}
+class "Product 商品" as Product {
+ productId : ID {unique}
+ title : String [0..1]
+ description : String [0..1]
+ category : String [0..1]
+ price : Decimal [0..1]
+ imageRefs : URI [0..5] {ordered}
+ deliveryLocation : String [0..1]
+ status : ProductStatus
+ version : Integer
+ publicHidden : Boolean
+ createdAt : DateTime
+ publishedAt : DateTime [0..1]
+}
+class "Reservation 预约" as Reservation {
+ reservationId : ID {unique}
+ requestId : String
+ titleSnapshot : String {readOnly}
+ priceSnapshot : Decimal {readOnly}
+ productVersionSnapshot : Integer {readOnly}
+ status : ReservationStatus
+ version : Integer
+ createdAt : DateTime
+ expiresAt : DateTime
+ confirmedAt : DateTime [0..1]
+ completedAt : DateTime [0..1]
+ endedAt : DateTime [0..1]
+ endReason : String [0..1]
+}
+class "ReviewRecord 审核记录" as ReviewRecord {
+ reviewId : ID {unique}
+ reviewedVersion : Integer
+ decision : 通过 | 驳回
+ reason : String [0..1]
+ reviewedAt : DateTime
+}
+class "TerminationRequest 终止申请" as TerminationRequest {
+ applicationId : ID {unique}
+ reason : String
+ status : 待处理 | 已批准 | 已拒绝 | 已关闭
+ buyerOpinion : String [0..1]
+ sellerOpinion : String [0..1]
+ handlingReason : String [0..1]
+ createdAt : DateTime
+ handledAt : DateTime [0..1]
+}
+class "ViolationRecord 违规处置记录" as ViolationRecord {
+ violationId : ID {unique}
+ reason : String
+ previousProductStatus : ProductStatus
+ handledAt : DateTime
+}
+class "Notification 通知" as Notification {
+ notificationId : ID {unique}
+ eventKey : String
+ subjectType : String
+ subjectId : ID
+ content : String
+ deliveryStatus : 待发送 | 已发送 | 待重试
+ createdAt : DateTime
+ sentAt : DateTime [0..1]
+ readAt : DateTime [0..1]
+}
+class "OperationLog 操作日志" as OperationLog {
+ logId : ID {unique}
+ requestId : String [0..1]
+ systemActor : String [0..1]
+ targetType : String
+ targetId : String [0..1]
+ operationType : String
+ beforeState : String [0..1]
+ afterState : String [0..1]
+ result : 成功 | 失败
+ reason : String [0..1]
+ occurredAt : DateTime
+}
+enum "ProductStatus 商品状态" as ProductStatus {
+ 草稿
+ 待审核
+ 已发布
+ 已预约
+ 已确认
+ 已完成
+ 已下架
+ 违规下架
+}
+enum "ReservationStatus 预约状态" as ReservationStatus {
+ 待卖家确认
+ 已确认
+ 已完成
+ 已取消
+ 已拒绝
+ 已超时
+ 已终止
+}
+
+User "1" -- "0..*" Product : seller 卖家 /\nlistedProducts 发布商品
+User "1" -- "0..*" Reservation : buyer 买家 /\npurchases 买方预约
+Product "1" -- "0..*" Reservation : product 商品 /\nreservations 历史预约
+Product "1" -- "0..*" ReviewRecord : reviewedProduct /\nreviews
+User "1" -- "0..*" ReviewRecord : reviewer 审核管理员 /\nreviewActions
+Reservation "1" -- "0..*" TerminationRequest : reservation /\nterminationRequests
+User "1" -- "0..*" TerminationRequest : applicant 申请人 /\napplications
+User "0..1" -- "0..*" TerminationRequest : handler 处理管理员 /\nhandledApplications
+Product "1" -- "0..*" ViolationRecord : violatingProduct /\nviolationRecords
+User "1" -- "0..*" ViolationRecord : operator 处置管理员 /\nviolationActions
+Reservation "0..1" -- "0..1" ViolationRecord : terminatedReservation /\nterminationViolation
+User "1" -- "0..*" Notification : recipient 接收人 /\nnotifications
+User "0..1" -- "0..*" OperationLog : actor 操作者 /\nlogs
+Product ..> ProductStatus : status 类型
+Reservation ..> ReservationStatus : status 类型
+
+note bottom of Reservation
+ {同一时刻最多一条有效预约}
+ 对每件商品：有效预约数 <= 1；
+ 有效 = 待卖家确认 或 已确认。
+ buyer != product.seller；卖家由商品推导。
+end note
+note bottom of TerminationRequest
+ {每条预约最多一条待处理申请}
+ applicant 为该预约买家或商品卖家；
+ handler 若存在，必须是管理员。
+ 普通批准终止须核实双方同意。
+end note
+legend bottom
+  实线为关联，端点标多重性；标签角色依次对应源码左、右类（详见审查表）。
+  虚线为类型依赖。
+  [0..1] 为可选属性；未注明的属性必填；ID 为领域标识类型。
+  普通用户可同时拥有 seller / buyer 角色；管理员不参与买卖。
+  通知与日志用“对象类型 + 编号”引用业务对象；详细约束见审查说明。
+endlegend
+@enduml
