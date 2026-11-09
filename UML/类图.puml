@@ -1,5 +1,5 @@
 @startuml
-' 领域类图初稿；设计推断与约束详见 类图审查说明.md
+' 领域类图；设计推断与约束详见 类图审查说明.md
 skinparam defaultFontName Noto Sans CJK SC
 skinparam defaultFontSize 15
 skinparam titleFontSize 24
@@ -14,7 +14,7 @@ skinparam classBorderColor #486581
 hide methods
 hide circle
 left to right direction
-title 校园二手交易系统 · 领域类图（初稿）
+title 校园二手交易系统 · 领域类图
 
 class "User 用户" as User {
  userId : ID {unique}
@@ -41,7 +41,6 @@ class "Product 商品" as Product {
 }
 class "Reservation 预约" as Reservation {
  reservationId : ID {unique}
- requestId : String
  titleSnapshot : String {readOnly}
  priceSnapshot : Decimal {readOnly}
  productVersionSnapshot : Integer {readOnly}
@@ -53,6 +52,12 @@ class "Reservation 预约" as Reservation {
  completedAt : DateTime [0..1]
  endedAt : DateTime [0..1]
  endReason : String [0..1]
+}
+class "ReservationRequest 预约请求记录" as ReservationRequest {
+ requestId : String
+ requestFingerprint : String
+ resultCode : String
+ resultReason : String [0..1]
 }
 class "ReviewRecord 审核记录" as ReviewRecord {
  reviewId : ID {unique}
@@ -134,9 +139,16 @@ User "1" -- "0..*" ViolationRecord : operator 处置管理员 /\nviolationAction
 Reservation "0..1" -- "0..1" ViolationRecord : terminatedReservation /\nterminationViolation
 User "1" -- "0..*" Notification : recipient 接收人 /\nnotifications
 User "0..1" -- "0..*" OperationLog : actor 操作者 /\nlogs
+User "1" -- "0..*" ReservationRequest : 请求发起者 / 请求记录
+ReservationRequest "0..*" -- "0..1" Reservation : 请求记录 / 关联预约
 Product ..> ProductStatus : status 类型
 Reservation ..> ReservationStatus : status 类型
 
+note bottom of Product
+  草稿允许缺少商品字段。
+  提交审核时，标题、描述、分类、价格和交付地点必填，
+  图片须有 1 至 5 张。
+end note
 note bottom of Reservation
  {同一时刻最多一条有效预约}
  对每件商品：有效预约数 <= 1；
@@ -148,6 +160,12 @@ note bottom of TerminationRequest
  applicant 为该预约买家或商品卖家；
  handler 若存在，必须是管理员。
  普通批准终止须核实双方同意。
+end note
+note bottom of ReservationRequest
+  {同一发起者下 requestId 唯一}
+  同标识、同内容重试时返回首次处理结果，
+  若关联了预约，同时返回预约当前状态。
+  同标识、不同内容则拒绝。
 end note
 legend bottom
   实线为关联，端点标多重性；标签角色依次对应源码左、右类（详见审查表）。
