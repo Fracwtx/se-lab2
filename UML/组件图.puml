@@ -1,0 +1,60 @@
+@startuml
+' 初稿：模块内接口调用共享事务；详细核对见 组件图审查说明.md
+skinparam defaultFontName Noto Sans CJK SC
+skinparam defaultFontSize 16
+skinparam titleFontSize 23
+skinparam componentStyle uml2
+skinparam shadowing false
+skinparam backgroundColor white
+skinparam ArrowColor #42566B
+skinparam packageStyle rectangle
+skinparam nodesep 30
+skinparam ranksep 35
+skinparam wrapWidth 280
+skinparam component {
+ BackgroundColor #EDF4FA
+ BorderColor #486581
+}
+top to bottom direction
+title 校园二手交易系统 · UML 组件图（初稿）
+package "业务组件（同一应用，共享事务上下文）" as B {
+ component "审核与违规处置\n审核、违规、终止审批" as M
+ component "预约与交易\n幂等、快照、预约状态与流转" as T
+ component "商品管理\n草稿、送审、修改、状态与版本" as P
+ component "商品查询与展示\n过滤、分页、公开详情" as Q
+ component "分类与交易统计\n去重汇总、快照金额" as S
+ M ..> T : 违规终止 / 已批准的普通终止
+ M ..> P : 审核转换；违规限制 / 解除
+ T ..> P : 状态 / 版本校验；条件变更
+ Q ..> P : 受权限控制的商品读取
+ Q -[hidden]right-> S
+}
+package "公共能力" as C {
+ component "账户与权限\n注册登录、角色与归属校验\n受保护联系方式" as A #F0F5EB
+ component "操作日志\n追加成功 / 失败记录\n管理员组合查询、敏感字段过滤" as L #F0F5EB
+ component "通知\n同事务登记待发送通知\n提交后投递站内通知 / 重试 / 已读" as N #F0F5EB
+}
+component "数据持久化\n仓储接口 + 共享数据库事务\n用户、商品、预约、快照、请求结果\n审核 / 违规 / 终止记录、日志、通知\n唯一约束、持久提交、备份恢复" as D #FFF1D6
+B .down.> A : 身份 / 归属校验
+B .down.> L : 商品 / 审核 / 交易审计
+B .down.> N : 关键变更登记通知
+S .down.> D : 商品 / 预约只读聚合
+P .down.> D : 商品仓储读写
+T .down.> D : 预约 / 快照 / 幂等结果读写
+M .down.> D : 审核 / 违规 / 处理记录读写
+A ..> D : 账号与凭据读写
+L ..> D : 同事务成功日志 / 独立失败日志
+N ..> D : 同事务登记；提交后投递 / 重试
+' 日志与通知的权限依赖合并在图例，避免回边干扰布局。
+P -[hidden]down-> A
+C -[hidden]down-> D
+A -[hidden]right-> L
+L -[hidden]right-> N
+legend bottom
+  虚线箭头：使用方 → 被依赖组件；标注为调用用途，不表示时间顺序。
+  包级箭头合并公共依赖；适用组件以箭头文字为准。组件是逻辑模块。
+  另：操作日志 → 账户与权限（管理员查询）；通知 → 账户与权限（接收人访问）。
+  关键写入共享一次事务：商品 + 预约 + 记录 + 成功日志 + 待发送通知。
+  任一必要写入失败整体回滚；通知提交后发送。详细流程见审查说明。
+endlegend
+@enduml
