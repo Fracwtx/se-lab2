@@ -1,0 +1,161 @@
+@startuml
+skinparam defaultFontName Noto Sans CJK SC
+skinparam defaultFontSize 15
+skinparam titleFontSize 24
+skinparam shadowing false
+skinparam sequenceMessageAlign left
+skinparam maxMessageSize 230
+skinparam BoxPadding 8
+skinparam sequenceGroupBackgroundColor #F4F7FA
+skinparam sequenceParticipantBackgroundColor #EAF2F8
+hide footbox
+autonumber
+title 校园二手交易系统 · 提交预约序列图（初稿）
+actor "买家" as Buyer
+boundary "商品详情页" as UI
+control "预约与交易模块" as Booking
+control "商品管理模块" as Product
+database "数据持久化\n同一数据库 / 同一事务" as DB
+control "通知模块\n提交后任务" as Notify
+
+Buyer -> UI : 点击提交预约
+UI -> Booking : 买家提交预约(requestId, productId,\nexpectedVersion, expectedPrice)
+Booking -> Booking : 校验会话、普通用户身份与参数格式\nbuyerId 从会话取得；规范化请求内容并计算指纹
+break 未登录 / 无买家权限 / 参数格式非法
+ Booking -> DB : 独立追加失败 OperationLog（不含敏感数据）
+ Booking --> UI : 普通校验失败：原因及可行下一步
+ UI --> Buyer : 提示登录或修正输入；结束本次提交
+end
+
+Booking -> DB : BEGIN（READ COMMITTED）
+Booking -> DB : 取得 (buyerId, requestId) 事务级互斥锁\n随后读取 ReservationRequest
+DB --> Booking : 已提交的请求记录，或不存在
+note over Booking, DB
+  同键并发请求等待前次事务结束后再读取；
+  请求键唯一。同 requestId 在不同买家下互不冲突。
+  指纹覆盖 productId、expectedVersion、expectedPrice。
+end note
+break 已存在且 requestFingerprint 不同
+ Booking -> DB : ROLLBACK（不覆盖首次请求记录）
+ Booking -> DB : 独立追加失败 OperationLog
+ Booking --> UI : 拒绝：相同 requestId 携带不同内容
+ UI --> Buyer : 保留原处理；新动作须用新 requestId
+end
+break 已存在且 requestFingerprint 相同
+ opt 首次记录关联了 Reservation
+  Booking -> DB : 读取关联预约当前状态（核对归属）
+  DB --> Booking : reservationId + 当前 ReservationStatus
+ end
+ Booking -> DB : COMMIT（只读，无新建预约或通知）
+ Booking --> UI : 首次 resultCode / resultReason\n+ 关联预约编号及查询时的当前状态（若有）
+ UI --> Buyer : 展示原结果与当前进度；本次结束
+ note over Booking, DB
+  即使原预约已取消、已拒绝、已超时、已终止或已完成，
+  重放也不会创建新预约；无关联预约时返回原失败结果。
+ end note
+end
+
+== 新 requestId：普通预检 ==
+Booking -> Product : 读取可操作商品及其有效预约
+Product -> DB : 联合读取 Product + 有效 Reservation（若有）
+DB --> Product : 商品字段 / 版本 / 价格 / 状态；有效预约归属
+Product --> Booking : 受权限控制的预检数据
+note over Booking, Product
+  有效预约仅指“待卖家确认”或“已确认”。
+  分支按下列次序判断；不向无关买家返回他人预约信息。
+end note
+break 商品不存在 / 不可访问 / 自购
+ Booking -> DB : 保存 ReservationRequest(指纹, 校验失败, 原因)\n及失败 OperationLog；COMMIT
+ Booking --> UI : 普通校验失败（不创建预约）
+ UI --> Buyer : 显示具体原因
+end
+break 本买家已有有效预约（即使用了新 requestId）
+ Booking -> DB : 保存 ReservationRequest(指纹, 已有预约, 原因)\n关联已有 Reservation；COMMIT
+ Booking --> UI : 返回已有预约编号及当前状态\n不新增预约、不重复日志成功事件或通知
+ UI --> Buyer : 展示已有预约
+end
+break 商品已有他人的有效预约 / 当前非已发布
+ Booking -> DB : 保存 ReservationRequest(指纹, 校验失败, 原因)\n及失败 OperationLog；COMMIT
+ Booking --> UI : 普通校验失败：已被预约或当前不可售
+ UI --> Buyer : 刷新列表选择其他商品
+end
+break 商品版本或价格与本次确认不同
+ Booking -> DB : 保存 ReservationRequest(指纹, 校验失败, 原因)\n及失败 OperationLog；COMMIT
+ Booking --> UI : 普通校验失败：版本 / 价格变化\n返回有权查看的当前价格与变更提示
+ UI --> Buyer : 主动刷新、重新确认；新动作用新 requestId
+end
+
+== 预检通过：锁定后复核，区分并发变化 ==
+Booking -> Product : 锁定并复核商品（加入当前事务）
+Product -> DB : 锁定 Product 行；等待已有写事务结束\n重新读取最新商品及有效预约
+DB --> Product : 锁定后的最新状态 / 版本 / 价格 / 有效预约
+Product --> Booking : 复核结果
+note over Product, DB
+  初稿选择商品行锁串行化同一商品的所有写操作；
+  修改、取消、确认、违规处置等均遵循同一锁协议。
+  锁定后重读，不能复用预检快照；锁保持至提交 / 回滚。
+end note
+break 预检后发生并发变化（复核不通过）
+ alt 本买家的另一个请求已创建有效预约
+  Booking -> DB : 保存本次 ReservationRequest 并关联该预约
+  Booking -> DB : COMMIT
+  Booking --> UI : 返回已有预约及当前状态（不新建）
+ else 被其他买家占用 / 状态、版本或价格已改变
+  Booking -> DB : 保存 ReservationRequest(指纹, 并发竞争失败, 原因)\n及失败 OperationLog；COMMIT
+  Booking --> UI : 并发竞争失败：已被预约 / 商品已变更\n提示刷新，不当作服务异常
+ end
+ UI --> Buyer : 展示复核结果；本次结束
+end
+
+== 原子写入与提交 ==
+group 同一事务；任一步失败立即停止后续写入，进入异常分支
+ Booking -> DB : 保存 Reservation（待卖家确认）与不可变交易快照\n关联买家和商品；expiresAt = createdAt + 24小时
+ note right of DB
+  数据库约束：同一商品最多一条有效预约。
+  保留全部历史预约，不用删除历史满足唯一性。
+ end note
+ Booking -> Product : 执行“买家提交预约”的商品状态变更
+ Product -> DB : 更新 Product：已发布 → 已预约，version + 1\n检查锁定状态、版本及受影响行数
+ DB --> Product : 更新结果
+ Product --> Booking : 商品状态变更结果
+ Booking -> DB : 保存 ReservationRequest\nrequestId、requestFingerprint、首次成功结果\n关联本次 Reservation
+ Booking -> DB : 写入成功 OperationLog\n记录请求、操作者、对象和前后状态
+ Booking -> DB : 写入 Notification（待发送）\n接收人、事件键、关联对象及内容
+end
+alt 必要写入均成功，且 COMMIT 明确成功
+ Booking -> DB : COMMIT
+ DB --> Booking : 已持久提交，释放事务锁
+ Booking --> UI : 预约成功：reservationId、待卖家确认
+ UI --> Buyer : 展示成功与待确认进度
+ note over Booking, Notify
+  用户响应不等待通知；进程在提交后崩溃时，
+  通知任务仍从数据库扫描待发送记录，不依赖内存回调。
+ end note
+ Notify -> DB : 扫描并领取已提交的待发送 Notification
+ DB --> Notify : 待发送通知
+ Notify -> Notify : 按事件键与接收人去重投递站内通知
+ alt 通知投递成功
+  Notify -> DB : 更新投递状态为已发送及 sentAt
+ else 通知投递失败
+  Notify -> DB : 标记待重试；之后仅重试通知
+ end
+else 写入明确失败 / 事务明确回滚
+ Booking -> DB : ROLLBACK 全部业务写入与成功结果\n释放锁；不留下半成功数据
+ Booking -> DB : 独立追加失败 OperationLog
+ Booking --> UI : 系统写入失败（区别于普通校验 / 并发竞争）\n不得返回成功；可按原 requestId 核对或重试
+ UI --> Buyer : 展示失败与恢复方式
+else 提交确认丢失 / 网络超时，结果未知
+ Booking --> UI : 提交结果待核对（不得断言成功或失败）
+ UI --> Buyer : 沿用原 requestId 与原内容查询或重试
+ note over Booking, DB
+  若实际已提交，重试走同键重放；若实际已回滚，
+  原键可重新处理。不能换标识冒险再次创建预约。
+ end note
+end
+legend bottom
+  依据 REQ-002、011、013、015～018、020、022、029。
+  “普通校验失败 / 并发竞争失败”等为请求结果分类，不是新增业务状态。
+  数据库故障可发生于任一步：立即终止并整体回滚；图中集中展示异常收尾。
+  死锁 / 锁等待超时不冒充“被他人预约”：回滚后沿用原标识重试或报告暂时不可用。
+endlegend
+@enduml
